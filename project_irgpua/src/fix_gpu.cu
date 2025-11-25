@@ -3,7 +3,6 @@
 #include <iostream>
 #include <cmath>
 
-// CUDA error checking
 void check_cuda_error(cudaError_t error, const char* file, int line) {
     if (error != cudaSuccess) {
         std::cerr << "CUDA error at " << file << ":" << line << ": " 
@@ -12,7 +11,6 @@ void check_cuda_error(cudaError_t error, const char* file, int line) {
     }
 }
 
-// Memory management helpers
 int* allocate_device_memory(size_t size) {
     int* d_ptr;
     CUDA_CHECK(cudaMalloc(&d_ptr, size * sizeof(int)));
@@ -31,10 +29,6 @@ void copy_device_to_host(int* h_ptr, const int* d_ptr, size_t size) {
     CUDA_CHECK(cudaMemcpy(h_ptr, d_ptr, size * sizeof(int), cudaMemcpyDeviceToHost));
 }
 
-// ============================================================================
-// STEP 1: STREAM COMPACTION (Remove garbage -27 values)
-// ============================================================================
-
 namespace gpu_kernels {
 
 __global__ void compute_predicate(const int* input, int* predicate, int size, int garbage_val) {
@@ -44,18 +38,15 @@ __global__ void compute_predicate(const int* input, int* predicate, int size, in
     }
 }
 
-// Simple block-level scan using shared memory
 __global__ void block_scan_kernel(const int* input, int* output, int* block_sums, int size) {
     extern __shared__ int temp[];
     
     int tid = threadIdx.x;
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
-    // Load input into shared memory
     temp[tid] = (idx < size) ? input[idx] : 0;
     __syncthreads();
     
-    // Up-sweep (reduce) phase
     int offset = 1;
     for (int d = blockDim.x >> 1; d > 0; d >>= 1) {
         __syncthreads();
@@ -67,15 +58,13 @@ __global__ void block_scan_kernel(const int* input, int* output, int* block_sums
         offset *= 2;
     }
     
-    // Save block sum
     if (tid == 0) {
         if (block_sums != nullptr) {
             block_sums[blockIdx.x] = temp[blockDim.x - 1];
         }
-        temp[blockDim.x - 1] = 0; // Clear last element for down-sweep
+        temp[blockDim.x - 1] = 0;
     }
     
-    // Down-sweep phase
     for (int d = 1; d < blockDim.x; d *= 2) {
         offset >>= 1;
         __syncthreads();
@@ -89,7 +78,6 @@ __global__ void block_scan_kernel(const int* input, int* output, int* block_sums
     }
     __syncthreads();
     
-    // Write results to output
     if (idx < size) {
         output[idx] = temp[tid];
     }
@@ -110,10 +98,6 @@ __global__ void scatter_compact(const int* input, int* output, const int* scan_r
     }
 }
 
-// ============================================================================
-// STEP 2: MAP TRANSFORMATION (Fix pixels)
-// ============================================================================
-
 __global__ void fix_pixels_map(int* buffer, int size) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
@@ -129,41 +113,30 @@ __global__ void fix_pixels_map(int* buffer, int size) {
     }
 }
 
-// ============================================================================
-// STEP 3: HISTOGRAM EQUALIZATION
-// ============================================================================
-
 __global__ void compute_histogram(const int* buffer, int* histogram, int size) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    // Use shared memory for local histogram
     __shared__ int local_hist[256];
     
-    // Initialize shared histogram
     if (threadIdx.x < 256) {
         local_hist[threadIdx.x] = 0;
     }
     __syncthreads();
     
-    // Compute local histogram
     if (idx < size) {
         atomicAdd(&local_hist[buffer[idx]], 1);
     }
     __syncthreads();
     
-    // Write to global histogram
     if (threadIdx.x < 256) {
         atomicAdd(&histogram[threadIdx.x], local_hist[threadIdx.x]);
     }
 }
 
-// Simple inclusive scan for histogram (256 elements only)
 __global__ void histogram_scan(int* histogram, int size) {
     extern __shared__ int temp[];
     
     int tid = threadIdx.x;
     
-    // Load into shared memory
     if (tid < size) {
         temp[tid] = histogram[tid];
     } else {
@@ -171,7 +144,6 @@ __global__ void histogram_scan(int* histogram, int size) {
     }
     __syncthreads();
     
-    // Inclusive scan using Hillis-Steele algorithm (simple for small arrays)
     for (int stride = 1; stride < size; stride *= 2) {
         int val = 0;
         if (tid >= stride && tid < size) {
@@ -185,14 +157,12 @@ __global__ void histogram_scan(int* histogram, int size) {
         __syncthreads();
     }
     
-    // Write back
     if (tid < size) {
         histogram[tid] = temp[tid];
     }
 }
 
 __global__ void find_first_nonzero(const int* histogram, int* result, int size) {
-    // Single thread search for simplicity
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         for (int i = 0; i < size; i++) {
             if (histogram[i] != 0) {
@@ -215,9 +185,6 @@ __global__ void histogram_equalization(int* buffer, const int* histogram,
     }
 }
 
-// ============================================================================
-// STATISTICS: Compute sum using reduction
-// ============================================================================
 
 __global__ void compute_partial_sums(const int* buffer, uint64_t* partial_sums, int size) {
     extern __shared__ uint64_t sdata[];
@@ -225,11 +192,9 @@ __global__ void compute_partial_sums(const int* buffer, uint64_t* partial_sums, 
     int tid = threadIdx.x;
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
-    // Load data into shared memory
     sdata[tid] = (idx < size) ? static_cast<uint64_t>(buffer[idx]) : 0;
     __syncthreads();
     
-    // Reduction in shared memory
     for (int s = blockDim.x / 2; s > 0; s >>= 1) {
         if (tid < s) {
             sdata[tid] += sdata[tid + s];
@@ -237,29 +202,22 @@ __global__ void compute_partial_sums(const int* buffer, uint64_t* partial_sums, 
         __syncthreads();
     }
     
-    // Write result for this block to global memory
     if (tid == 0) {
         partial_sums[blockIdx.x] = sdata[0];
     }
 }
 
-} // namespace gpu_kernels
-
-// ============================================================================
-// MAIN GPU PIPELINE FUNCTION
-// ============================================================================
+}
 
 void fix_image_gpu(Image& to_fix) {
     const int image_size = to_fix.width * to_fix.height;
     const int original_size = to_fix.size();
     constexpr int garbage_val = -27;
     
-    // Thread configuration
     const int block_size = 256;
     const int grid_size = (original_size + block_size - 1) / block_size;
     const int grid_size_image = (image_size + block_size - 1) / block_size;
     
-    // Allocate device memory
     int* d_buffer;
     int* d_predicate;
     int* d_scan_result;
@@ -274,39 +232,29 @@ void fix_image_gpu(Image& to_fix) {
     CUDA_CHECK(cudaMalloc(&d_histogram, 256 * sizeof(int)));
     CUDA_CHECK(cudaMalloc(&d_cdf_min, sizeof(int)));
     
-    // Copy input to device
     copy_host_to_device(d_buffer, to_fix.buffer, original_size);
     CUDA_CHECK(cudaMemset(d_histogram, 0, 256 * sizeof(int)));
-    
-    // ========================================================================
-    // STEP 1: STREAM COMPACTION
-    // ========================================================================
-    
-    // Compute predicate
+   
     gpu_kernels::compute_predicate<<<grid_size, block_size>>>(
         d_buffer, d_predicate, original_size, garbage_val
     );
     CUDA_CHECK(cudaDeviceSynchronize());
     
-    // Exclusive scan on predicate (simplified two-level scan)
     int num_blocks = grid_size;
     int* d_block_sums;
     CUDA_CHECK(cudaMalloc(&d_block_sums, num_blocks * sizeof(int)));
     
-    // Block-level scan
     size_t shared_mem_size = block_size * sizeof(int);
     gpu_kernels::block_scan_kernel<<<num_blocks, block_size, shared_mem_size>>>(
         d_predicate, d_scan_result, d_block_sums, original_size
     );
     CUDA_CHECK(cudaDeviceSynchronize());
     
-    // Scan block sums (simple CPU fallback for small array)
     if (num_blocks > 1) {
         int* h_block_sums = new int[num_blocks];
         CUDA_CHECK(cudaMemcpy(h_block_sums, d_block_sums, num_blocks * sizeof(int), 
                              cudaMemcpyDeviceToHost));
         
-        // CPU exclusive scan
         int sum = 0;
         for (int i = 0; i < num_blocks; i++) {
             int temp = h_block_sums[i];
@@ -318,14 +266,12 @@ void fix_image_gpu(Image& to_fix) {
                              cudaMemcpyHostToDevice));
         delete[] h_block_sums;
         
-        // Add block sums
         gpu_kernels::add_block_sums<<<num_blocks, block_size>>>(
             d_scan_result, d_block_sums, original_size
         );
         CUDA_CHECK(cudaDeviceSynchronize());
     }
     
-    // Scatter to compact
     gpu_kernels::scatter_compact<<<grid_size, block_size>>>(
         d_buffer, d_compacted, d_scan_result, original_size, garbage_val
     );
@@ -333,33 +279,23 @@ void fix_image_gpu(Image& to_fix) {
     
     CUDA_CHECK(cudaFree(d_block_sums));
     
-    // ========================================================================
-    // STEP 2: MAP TRANSFORMATION
-    // ========================================================================
     
     gpu_kernels::fix_pixels_map<<<grid_size_image, block_size>>>(
         d_compacted, image_size
     );
     CUDA_CHECK(cudaDeviceSynchronize());
     
-    // ========================================================================
-    // STEP 3: HISTOGRAM EQUALIZATION
-    // ========================================================================
-    
-    // Compute histogram
     gpu_kernels::compute_histogram<<<grid_size_image, block_size>>>(
         d_compacted, d_histogram, image_size
     );
     CUDA_CHECK(cudaDeviceSynchronize());
     
-    // Inclusive scan of histogram
     shared_mem_size = 256 * sizeof(int);
     gpu_kernels::histogram_scan<<<1, 256, shared_mem_size>>>(
         d_histogram, 256
     );
     CUDA_CHECK(cudaDeviceSynchronize());
     
-    // Find first non-zero value (cdf_min)
     gpu_kernels::find_first_nonzero<<<1, 1>>>(
         d_histogram, d_cdf_min, 256
     );
@@ -368,19 +304,14 @@ void fix_image_gpu(Image& to_fix) {
     int h_cdf_min;
     CUDA_CHECK(cudaMemcpy(&h_cdf_min, d_cdf_min, sizeof(int), cudaMemcpyDeviceToHost));
     
-    // Apply histogram equalization
     gpu_kernels::histogram_equalization<<<grid_size_image, block_size>>>(
         d_compacted, d_histogram, image_size, h_cdf_min
     );
     CUDA_CHECK(cudaDeviceSynchronize());
     
-    // ========================================================================
-    // COPY RESULTS BACK
-    // ========================================================================
     
     copy_device_to_host(to_fix.buffer, d_compacted, image_size);
     
-    // Free device memory
     CUDA_CHECK(cudaFree(d_buffer));
     CUDA_CHECK(cudaFree(d_predicate));
     CUDA_CHECK(cudaFree(d_scan_result));
@@ -389,7 +320,6 @@ void fix_image_gpu(Image& to_fix) {
     CUDA_CHECK(cudaFree(d_cdf_min));
 }
 
-// Compute total sum using GPU reduction
 uint64_t compute_image_sum_gpu(const int* buffer, int size) {
     const int block_size = 256;
     const int grid_size = (size + block_size - 1) / block_size;
@@ -408,7 +338,6 @@ uint64_t compute_image_sum_gpu(const int* buffer, int size) {
     );
     CUDA_CHECK(cudaDeviceSynchronize());
     
-    // Copy partial sums back and sum on CPU (simple for now)
     uint64_t* h_partial_sums = new uint64_t[grid_size];
     CUDA_CHECK(cudaMemcpy(h_partial_sums, d_partial_sums, grid_size * sizeof(uint64_t), 
                          cudaMemcpyDeviceToHost));

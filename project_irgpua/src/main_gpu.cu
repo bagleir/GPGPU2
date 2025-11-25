@@ -10,16 +10,10 @@
 #include <chrono>
 #include <cuda_runtime.h>
 
-// External function for GPU sum computation
 uint64_t compute_image_sum_gpu(const int* buffer, int size);
 
 int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
-{
-    std::cout << "==================================================" << std::endl;
-    std::cout << "    GPU BY-HAND VERSION - IRGPUA PROJECT" << std::endl;
-    std::cout << "==================================================" << std::endl;
-    
-    // Check for CUDA device
+{    
     int device_count = 0;
     cudaError_t error = cudaGetDeviceCount(&device_count);
     if (error != cudaSuccess || device_count == 0) {
@@ -27,22 +21,16 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         return EXIT_FAILURE;
     }
     
-    // Print GPU info
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
     std::cout << "Using GPU: " << prop.name << std::endl;
     std::cout << "Compute Capability: " << prop.major << "." << prop.minor << std::endl;
-    std::cout << "==================================================" << std::endl;
     
-    // -- Pipeline initialization
-    std::cout << "\n[1/4] Loading images from pipeline..." << std::endl;
     auto start_total = std::chrono::high_resolution_clock::now();
     
-    // - Get file paths
     using recursive_directory_iterator = std::filesystem::recursive_directory_iterator;
     std::vector<std::string> filepaths;
     
-    // Try AFS path first, fallback to local if not available
     std::string images_path = "/home/gablacav/Desktop/ING3/GPU/project_irgpua/images";
     if (!std::filesystem::exists(images_path)) {
         std::cout << "AFS path not found, trying local 'images' directory..." << std::endl;
@@ -59,28 +47,23 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     
     std::cout << "Found " << filepaths.size() << " images to process" << std::endl;
     
-    // - Init pipeline object
     auto start_load = std::chrono::high_resolution_clock::now();
     Pipeline pipeline(filepaths);
     auto end_load = std::chrono::high_resolution_clock::now();
     auto load_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_load - start_load).count();
     std::cout << "Pipeline loaded in " << load_time << " ms" << std::endl;
     
-    // -- Main loop: Process images with GPU
     const int nb_images = pipeline.images.size();
     std::vector<Image> images(nb_images);
     
     std::cout << "\n[2/4] Processing images on GPU..." << std::endl;
     auto start_compute = std::chrono::high_resolution_clock::now();
     
-    // Process images one by one (pipeline style)
-    // Note: For better performance, consider using CUDA streams for overlapping
     #pragma omp parallel for schedule(dynamic)
     for (int i = 0; i < nb_images; ++i)
     {
         images[i] = pipeline.get_image(i);
         
-        // Apply GPU image fixing pipeline
         fix_image_gpu(images[i]);
         
         if ((i + 1) % 10 == 0 || i == nb_images - 1) {
@@ -94,7 +77,6 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     std::cout << "GPU processing completed in " << compute_time << " ms" << std::endl;
     std::cout << "Average time per image: " << (compute_time / (float)nb_images) << " ms" << std::endl;
     
-    // -- Compute statistics
     std::cout << "\n[3/4] Computing image statistics on GPU..." << std::endl;
     auto start_stats = std::chrono::high_resolution_clock::now();
     
@@ -104,7 +86,6 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         auto& image = images[i];
         const int image_size = image.width * image.height;
         
-        // Use GPU reduction for sum computation
         image.to_sort.total = compute_image_sum_gpu(image.buffer, image_size);
     }
     
@@ -112,7 +93,6 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     auto stats_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_stats - start_stats).count();
     std::cout << "Statistics computed in " << stats_time << " ms" << std::endl;
     
-    // -- Sort images by total (OPTIONAL)
     std::cout << "\n[4/4] Sorting images by pixel sum..." << std::endl;
     auto start_sort = std::chrono::high_resolution_clock::now();
     
@@ -123,7 +103,6 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         return images[n++].to_sort;
     });
     
-    // CPU sort for now (GPU radix sort is optional advanced feature)
     std::sort(to_sort.begin(), to_sort.end(), [](ToSort a, ToSort b) {
         return a.total < b.total;
     });
@@ -132,7 +111,6 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     auto sort_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_sort - start_sort).count();
     std::cout << "Sorting completed in " << sort_time << " ms" << std::endl;
     
-    // -- Write results
     std::cout << "\nWriting output images..." << std::endl;
     for (int i = 0; i < nb_images; ++i)
     {
@@ -142,10 +120,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         images[i].write(str);
     }
     
-    // Print statistics
-    std::cout << "\n==================================================" << std::endl;
     std::cout << "RESULTS SUMMARY:" << std::endl;
-    std::cout << "==================================================" << std::endl;
     std::cout << "First 5 images (sorted by total):" << std::endl;
     for (int i = 0; i < std::min(5, nb_images); ++i) {
         std::cout << "  Image #" << to_sort[i].id 
@@ -164,20 +139,13 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     auto end_total = std::chrono::high_resolution_clock::now();
     auto total_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_total - start_total).count();
     
-    std::cout << "\n==================================================" << std::endl;
     std::cout << "PERFORMANCE METRICS:" << std::endl;
-    std::cout << "==================================================" << std::endl;
     std::cout << "Loading time:     " << load_time << " ms" << std::endl;
     std::cout << "GPU compute time: " << compute_time << " ms" << std::endl;
     std::cout << "Statistics time:  " << stats_time << " ms" << std::endl;
     std::cout << "Sorting time:     " << sort_time << " ms" << std::endl;
     std::cout << "Total time:       " << total_time << " ms" << std::endl;
-    std::cout << "==================================================" << std::endl;
-    
-    std::cout << "\n✓ Done! The internet is safe now :)" << std::endl;
-    std::cout << "Output files: GPU_Image#*.pgm" << std::endl;
-    
-    // Cleaning
+        
     for (int i = 0; i < nb_images; ++i)
         free(images[i].buffer);
     
