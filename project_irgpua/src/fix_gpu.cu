@@ -5,8 +5,6 @@
 
 void check_cuda_error(cudaError_t error, const char* file, int line) {
     if (error != cudaSuccess) {
-        std::cerr << "CUDA error at " << file << ":" << line << ": " 
-                  << cudaGetErrorString(error) << std::endl;
         exit(EXIT_FAILURE);
     }
 }

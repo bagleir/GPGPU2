@@ -23,9 +23,6 @@ set(CMAKE_CUDA_ARCHITECTURES 75)
 
 include_directories(src)
 
-# =============================================================================
-# EXECUTABLE 1: CPU VERSION (Original Reference)
-# =============================================================================
 add_executable(main_cpu 
     src/main.cu 
     src/fix_cpu.cu
@@ -41,9 +38,6 @@ target_link_libraries(main_cpu PUBLIC
     raft::raft
 )
 
-# =============================================================================
-# EXECUTABLE 2: GPU BY-HAND VERSION (Custom Kernels)
-# =============================================================================
 add_executable(main_gpu 
     src/main_gpu.cu 
     src/fix_gpu.cu
@@ -64,9 +58,6 @@ target_link_libraries(main_gpu PUBLIC
     raft::raft
 )
 
-# =============================================================================
-# EXECUTABLE 3: GPU INDUSTRIAL VERSION (CUB/Thrust)
-# =============================================================================
 add_executable(main_gpu_industrial 
     src/main_gpu_industrial.cu 
     src/fix_gpu_industrial.cu
@@ -88,14 +79,8 @@ target_link_libraries(main_gpu_industrial PUBLIC
     raft::raft
 )
 
-# =============================================================================
-# BUILD CONFIGURATION
-# =============================================================================
-
-# Enable verbose output for debugging
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
-# Optimization flags for release
 if(CMAKE_BUILD_TYPE MATCHES Release)
     target_compile_options(main_cpu PRIVATE 
         $<$<COMPILE_LANGUAGE:CUDA>:-O3>
@@ -111,7 +96,6 @@ if(CMAKE_BUILD_TYPE MATCHES Release)
     )
 endif()
 
-# Debug flags
 if(CMAKE_BUILD_TYPE MATCHES Debug)
     target_compile_options(main_cpu PRIVATE 
         $<$<COMPILE_LANGUAGE:CUDA>:-G -g>
@@ -126,30 +110,3 @@ if(CMAKE_BUILD_TYPE MATCHES Debug)
         $<$<COMPILE_LANGUAGE:CXX>:-g>
     )
 endif()
-
-# =============================================================================
-# INSTALLATION & INFO
-# =============================================================================
-
-message(STATUS "===========================================================")
-message(STATUS "IRGPUA Project - GPU Image Processing Pipeline")
-message(STATUS "===========================================================")
-message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-message(STATUS "CUDA Architectures: ${CMAKE_CUDA_ARCHITECTURES}")
-message(STATUS "")
-message(STATUS "Three executables will be built:")
-message(STATUS "  1. main_cpu            - CPU reference implementation")
-message(STATUS "  2. main_gpu            - GPU by-hand (custom kernels)")
-message(STATUS "  3. main_gpu_industrial - GPU industrial (CUB/Thrust)")
-message(STATUS "")
-message(STATUS "Usage after build:")
-message(STATUS "  cd build")
-message(STATUS "  ./main_cpu            # Run CPU version")
-message(STATUS "  ./main_gpu            # Run GPU by-hand version")
-message(STATUS "  ./main_gpu_industrial # Run GPU industrial version")
-message(STATUS "")
-message(STATUS "Compare performance:")
-message(STATUS "  time ./main_cpu")
-message(STATUS "  time ./main_gpu")
-message(STATUS "  time ./main_gpu_industrial")
-message(STATUS "===========================================================")
